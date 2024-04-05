@@ -1,0 +1,766 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no" />
+    <!--<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/4.0.0/css/bootstrap.min.css">-->
+    <link href="../static/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="../static/css/map.css" />
+    <style type="text/css">
+        body,
+        html,
+        #map {
+            position: absolute;
+            top: 0px;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            margin: 0;
+        }
+
+        #num_container {
+            height: 100%;
+            z-index: 10
+        }
+
+        #rewards_container {
+            height: 100%;
+            z-index: 10;
+        }
+
+        #rate_container {
+            height: 100%;
+            z-index: 10;
+        }
+
+        .table th,.table td{
+            padding: 0px 6px;
+            font-size: 13px;
+            text-align: center;
+        }
+
+    </style>
+    <script type="text/javascript" src="../static/js/jquery.js"></script>
+    <script type="text/javascript" src="../static/js/popper.min.js"></script>
+    <script type="text/javascript" src="../static/js/bootstrap.js"></script>
+    <script type="text/javascript" src="../static/js/echarts.min.js"></script>
+    <script type="text/javascript" src="../static/js/mapstyle.js"></script>
+    <script type="text/javascript" src="../static/js/bmap.min.js"></script>
+    <!--<script src="http://cdn.hcharts.cn/highstock/10.0.0/highstock.js"></script>-->
+    <script type="text/javascript" src="../static/js/highstock.js"></script>
+    <script type="text/javascript" src="../static/js/highcharts-more.js"></script>
+    <script>
+        let whdef = 100 / 1920; // 表示1920的设计图,使用100PX的默认值
+        let wW = window.innerWidth > 1919 ? window.innerWidth : 1920; // 当前窗口的宽度
+        let rem = wW * whdef; // 以默认比例值乘以当前窗口宽度,得到该宽度下的相应FONT-SIZE值
+        $("html").css("font-size", rem + "px");
+        window.addEventListener("resize", function () {
+            let whdef = 100 / 1920; // 表示1920的设计图,使用100PX的默认值
+            let wW = window.innerWidth > 1919 ? window.innerWidth : 1920; // 当前窗口的宽度
+            let rem = wW * whdef; // 以默认比例值乘以当前窗口宽度,得到该宽度下的相应FONT-SIZE值
+            $("html").css("font-size", rem + "px");
+        });
+    </script>
+    <title>DSS Taxi</title>
+</head>
+<body>
+<div id="current-time-div"></div>
+<div id="map"></div>
+<!-- 时间拖拽 start -->
+    <!-- time-wrap需要加上not_show -->
+    <div class="time-wrap">
+        <div class="switch"></div>
+        <div class="timeBase-change">
+            <div class="time-title"></div>
+            <div class="time">
+                <div class="drapHand">
+                    <div class="verline"></div>
+                </div>
+            </div>
+            <!-- 用于显示4:00-24:00 -->
+            <div class="scalenum"></div>
+            <!-- 用于显示几条分割线 -->
+            <div class="scale"></div>
+        </div>
+        <!-- 绘制supply & demand 曲线 -->
+        <div id="peakLine"></div>
+        <div id="play-speed">
+            <!-- Default dropup button -->
+            <div class="btn-group dropup" style="top:50px">
+              <button type="button" id="dropdownMenu" class="btn btn-secondary dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false">
+                1x
+              </button>
+                <ul class="dropdown-menu dropdown-menu-right" aria-labelledby="dropdownMenu">
+                    <li><button class="dropdown-item" type="button" >1x</button></li>
+                    <li><button class="dropdown-item" type="button">1.5x</button></li>
+                    <li><button class="dropdown-item" type="button">2x</button></li>
+                  <li><button class="dropdown-item" type="button">5x</button></li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <!-- 时间拖拽 end -->
+<div style="margin: 10px 10px;font-size: 0.3rem">
+<jelly-switch  onToggle="toggleHeatmap(event)" id="heatmap_switch" style="z-index: 100;font-size: 16px; --on-color:#91CC75;--off-color:#2EC0F6">
+    <p slot="content-right" style="color: #2EC0F6">Order Heatmap</p>
+</jelly-switch>
+<script>
+
+    let ifOrder = true;
+
+    function toggleHeatmap(e) {
+        let $heatmap_switch = $('#heatmap_switch p');
+        if (!e.detail.value) {
+            $heatmap_switch.text('Order Heatmap');
+            $heatmap_switch.css('color', '#2EC0F6');
+            ifOrder = true;
+        } else {
+            $heatmap_switch.text('Driver Heatmap');
+            $heatmap_switch.css('color', '#91CC75');
+            ifOrder = false;
+        }
+        loadHeatMap();
+    }
+
+    function  update(time,data) {
+        updateTime(time,data);
+        updateNum(time,data);
+        updateReward(time,data);
+        updateRate(time,data);
+    }
+
+    function getDateObj() {
+        let sec = parseInt(currentTime % 60);
+        let min = parseInt((currentTime - sec) % 3600 / 60);
+        let hour = parseInt((currentTime - min * 60 - sec) / 3600);
+        return new Date(2016,11,6,hour,min,sec);
+    }
+
+    function loadHeatMap() {
+        heatmap_data = ifOrder?order_heatmap:driver_heatmap;
+        if(heatmap_data.length !== 0) {
+            for(let i = 0; i < heatmap_data.length; i++) {
+                heatmap_data[i] = heatmap_data[i].concat([1]);
+            }
+            let curZoom = bmap.getZoom();
+            if (curZoom <= zoomThreshold) {
+                option.series[0].data = heatmap_data;
+                option.bmap.zoom = bmap.getZoom();
+                option.bmap.center = [bmap.getCenter().lng, bmap.getCenter().lat];
+                myChart.setOption(option);
+            }
+        }
+    }
+
+    </script>
+    </div>
+<!-- num -->
+
+<div class="data-box1 box1-back" style=" position: absolute;
+            bottom: 21%;
+            left: 0px;
+            margin-left: 20px;
+            margin-bottom: 20px;
+            height: 200px;
+            width : 300px;">
+    <i class="topL"></i>
+    <i class="topR"></i>
+    <i class="bottomL"></i>
+    <i class="bottomR"></i>
+    <div class="data-title">
+        <b class="data-title-left">[</b>
+        <span>Driver/Order Stat.</span>
+        <b class="data-title-right">]</b>
+    </div>
+    <div id="num_container">
+    </div>
+</div>
+<!-- rewards -->
+<div class="data-box1 box1-back" style=" position: absolute;
+            bottom: 21%;
+            right: 0px;
+            margin-left: 20px;
+            margin-bottom: 20px;
+            height: 260px;
+            width : 330px;">
+    <i class="topL"></i>
+    <i class="topR"></i>
+    <i class="bottomL"></i>
+    <i class="bottomR"></i>
+    <div class="data-title">
+        <b class="data-title-left">[</b>
+        <span>Rewards</span>
+        <b class="data-title-right">]</b>
+    </div>
+    <div id="rewards_container">
+    </div>
+</div>
+<div class="data-box1 box1-back" style=" position: absolute;
+            top:20px;
+            right: 0px;
+            margin-left: 20px;
+            margin-bottom: 20px;
+            height: 320px;
+            width : 300px;">
+    <i class="topL"></i>
+    <i class="topR"></i>
+    <i class="bottomL"></i>
+    <i class="bottomR"></i>
+    <div class="data-title">
+        <b class="data-title-left">[</b>
+        <span>Ratio</span>
+        <b class="data-title-right">]</b>
+    </div>
+    <div id="rate_container">
+    </div>
+</div>
+<div class="data-box1 left_tb fl" style=" position: absolute;
+           top: 70px;
+            left: 0px;
+            margin-left: 20px;
+            margin-bottom: 20px;
+            height: 335px;
+            width : 300px;">
+    <i class="topL"></i>
+    <i class="topR"></i>
+    <i class="bottomL"></i>
+    <i class="bottomR"></i>
+    <div class="data-title">
+        <b class="data-title-left fl">[</b>
+        <span>Time and Stat.</span>
+        <b class="data-title-right fr">]</b>
+    </div>
+    <!-- 项目概览-->
+    <div class="xmglan">
+        <ul class="xmgl_heard" style="padding-inline-start: 0px;margin-bottom: 0rem;">
+            <li>Current</li>
+            <li class="hove">Accumulated</li>
+        </ul>
+        <div id="xmgl_cen">
+            <div class="xmgl_tb" style="position: relative; top: 0px;">
+                <ul class="xm_cszs">
+		    <!-- <li>匹配算法时间: <br/> <span id="matNum">100</span>ms</li> -->
+		    <!-- <li>调度算法时间: <br/> <span id="repNum">100</span>ms</li> -->
+                    <li>Alg. Time Consumption <br/> <span id="matNum">100</span>ms</li>
+                </ul>
+                <div class="arrow arrowup" id="matUp" style=" position: absolute; top:75px;right: 50px;"></div>
+                <div class="arrow arrowdown" id="matDown" style="display: none; position: absolute;top:55px;right:50px;"></div>
+		<!-- <div class="arrow arrowup" id="repUp" style="position: absolute; top:178px;right: 50px;"></div>  -->
+		<!-- <div class="arrow arrowdown" id="repDown" style="display: none; position: absolute;top:145px;right:50px;"></div> -->
+            </div>
+            <div class="xmgl_tb none">
+                <div class="col6" style="width: 100%;">
+			<div class="item-box">
+				<div class="item-con merge">
+					<div class="table scroll">
+						<div class="scroll-con" >
+							<table class="border" id="merge-table" style="width:100%">
+								<thead><tr><th>Series</th><th>Index</th><th>Value</th></tr></thead>
+								<tbody style="font-size: 10px">
+                                <tr>
+                                    <td rowspan="3">Driver/Order</td>
+                                    <td>Current Idle Drivers</td>
+                                    <td id="table_avail_driver"></td>
+                                </tr>
+                                <tr>
+                                    <td>Current Orders</td>
+                                    <td id="table_order_num"></td>
+                                </tr>
+                                <tr>
+                                    <td>Total Drivers</td>
+                                    <td id="table_total_dirver"></td>
+                                </tr>
+                                <tr>
+                                    <td rowspan="3">Ratios</td>
+                                    <td>Response Ratio</td>
+                                    <td id="table_ans_rate"></td>
+                                </tr>
+                                <tr>
+                                    <td>Reject Ratio</td>
+                                    <td id="table_rej_rate"></td>
+                                </tr>
+                                <tr>
+                                    <td>Waiting Ratio</td>
+                                    <td id="table_wait_rate"></td>
+                                </tr>
+                                <tr>
+                                    <td rowspan="2">Rewards</td>
+                                    <td>Accu. Rewards</td>
+                                    <td id="table_accu_rewards"></td>
+                                </tr>
+                                <tr>
+                                    <td>Seg Rewards</td>
+                                    <td id="table_seg_rewards"></td>
+                                </tr>
+								</tbody>
+							</table>
+						</div>
+					</div>
+				</div>
+
+			</div>
+		</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+</body>
+</html>
+<script type="text/javascript" src="../static/js/areaRange.js"></script>
+<!-- sidebar -->
+<!-- dataBox -->
+<link rel="stylesheet" href="../static/css/dataBox.css">
+<!-- table -->
+<link rel="stylesheet" href="../static/css/leo.css">
+<!-- num -->
+<!-- num test -->
+<script src="../static/js/num.js"></script>
+<!-- rewards-->
+<script src="../static/js/rewards.js"></script>
+<!-- rate -->
+<script src="../static/js/rate.js"></script>
+<!-- time -->
+<script src="../static/js/timeAndCount.js"></script>
+<!-- button -->
+<!-- <script src ="https://unpkg.com/jelly-switch@0.2.3/lib/index.min.js"></script> -->
+<script src ="../static/js/switch.js"></script>
+
+<script>
+    let carouselTimeInterval = 2000; // 单位是毫秒，即2秒更新一下地图
+    let myChart = echarts.init($("#map")[0]);
+    let zoomThreshold = 12;
+    let currentTime = 4 * 3600;
+    let order_heatmap;
+    let driver_heatmap;
+    let option = {
+        bmap: {
+            center: [104.06, 30.67],
+            zoom: 12,
+            roam: true,
+            mapStyle: {
+                'styleJson': [
+                    {
+                        'featureType': 'water',
+                        'elementType': 'all',
+                        'stylers': {
+                            'color': '#031628'
+                        }
+                    },
+                    {
+                        'featureType': 'land',
+                        'elementType': 'geometry',
+                        'stylers': {
+                            'color': '#000102'
+                        }
+                    },
+                    {
+                        'featureType': 'highway',
+                        'elementType': 'all',
+                        'stylers': {
+                            'visibility': 'off'
+                        }
+                    },
+                    {
+                        'featureType': 'arterial',
+                        'elementType': 'geometry.fill',
+                        'stylers': {
+                            'color': '#000000'
+                        }
+                    },
+                    {
+                        'featureType': 'arterial',
+                        'elementType': 'geometry.stroke',
+                        'stylers': {
+                            'color': '#0b3d51'
+                        }
+                    },
+                    {
+                        'featureType': 'local',
+                        'elementType': 'geometry',
+                        'stylers': {
+                            'color': '#000000'
+                        }
+                    },
+                    {
+                        'featureType': 'railway',
+                        'elementType': 'geometry.fill',
+                        'stylers': {
+                            'color': '#000000'
+                        }
+                    },
+                    {
+                        'featureType': 'railway',
+                        'elementType': 'geometry.stroke',
+                        'stylers': {
+                            'color': '#08304b'
+                        }
+                    },
+                    {
+                        'featureType': 'subway',
+                        'elementType': 'geometry',
+                        'stylers': {
+                            'lightness': -70
+                        }
+                    },
+                    {
+                        'featureType': 'building',
+                        'elementType': 'geometry.fill',
+                        'stylers': {
+                            'color': '#000000'
+                        }
+                    },
+                    {
+                        'featureType': 'all',
+                        'elementType': 'labels.text.fill',
+                        'stylers': {
+                            'color': '#857f7f'
+                        }
+                    },
+                    {
+                        'featureType': 'all',
+                        'elementType': 'labels.text.stroke',
+                        'stylers': {
+                            'color': '#000000'
+                        }
+                    },
+                    {
+                        'featureType': 'building',
+                        'elementType': 'geometry',
+                        'stylers': {
+                            'color': '#022338'
+                        }
+                    },
+                    {
+                        'featureType': 'green',
+                        'elementType': 'geometry',
+                        'stylers': {
+                            'color': '#062032'
+                        }
+                    },
+                    {
+                        'featureType': 'boundary',
+                        'elementType': 'all',
+                        'stylers': {
+                            'color': '#465b6c'
+                        }
+                    },
+                    {
+                        'featureType': 'manmade',
+                        'elementType': 'all',
+                        'stylers': {
+                            'color': '#022338'
+                        }
+                    },
+                    {
+                        'featureType': 'all',
+                        'elementType': 'labels',
+                        'stylers': {
+                            'visibility': 'off'
+                        }
+                    }
+                ]
+            }
+        },
+        visualMap: {
+            show: false,
+            top: 'top',
+            min: 0,
+            max: 5,
+            seriesIndex: 0,
+            calculable: true,
+            inRange: {
+                color: ['green', 'green', 'yellow', 'orange', 'red']
+            }
+        },
+        series: [
+            {
+                type: 'heatmap',
+                coordinateSystem: 'bmap',
+                data: [],
+                pointSize: 5,
+                blurSize: 6,
+            },
+        ]
+    };
+    myChart.setOption(option);
+    let bmap = myChart.getModel().getComponent('bmap').getBMap();
+    let heatmap_data = [];
+    bmap.addControl(new BMap.MapTypeControl({mapTypes: [BMAP_NORMAL_MAP]}));
+    bmap.addEventListener("zoomend", function(e){
+        let zoomNum = bmap.getZoom();
+        if(zoomNum > zoomThreshold) {
+            option.bmap.zoom = zoomNum;
+            option.bmap.center = [bmap.getCenter().lng, bmap.getCenter().lat];
+            option.series[0].data = [];
+            myChart.setOption(option);
+        } else {
+            option.bmap.zoom = zoomNum;
+            option.bmap.center = [bmap.getCenter().lng, bmap.getCenter().lat];
+            option.series[0].data = heatmap_data;
+            myChart.setOption(option);
+        }
+    });
+
+    function sec2Time() {
+        let sec = parseInt(currentTime % 60);
+        let min = parseInt((currentTime - sec) % 3600 / 60);
+        let hour = parseInt((currentTime - min * 60 - sec) / 3600);
+        if (hour < 10) {
+            hour = "0" + hour;
+        }
+        if (min < 10) {
+            min = "0" + min;
+        }
+        if (sec < 10) {
+            sec = "0" + sec;
+        }
+        return hour + ":" + min + ":" + sec;
+    }
+
+    function renderTime(start, end) {
+        let hourWidth = parseInt((1 / (end - start)) * 10000) / 100;
+        let scalenum =
+            "<span  class='num0' style='width:" +
+            hourWidth +
+            "%" +
+            "'>" +
+            start +
+            ":00</span>";
+        let scale = "<span class='first'></span>";
+        for (let i = start + 1; i < end + 1; i++) {
+            let val = 0;
+            if (i > 12) {
+                val = -4 + (i - start) * 4.95;
+            } else {
+                val = -4 + (i - start) * 5;
+            }
+            scalenum +=
+                "<span  style='left: "+  val +"%;width:" +
+                hourWidth +
+                "%'" +
+                ">" +
+                i +
+                ":00" +
+                "</span>";
+            if (i % 4 === 0) {
+                if (i !== end) {
+                    scale += "<span class='not-first'></span>";
+                } else {
+                    scale += "<span class='last'></span>";
+                }
+            }
+        }
+        $(".scalenum").html(scalenum);
+        let $currentTimeDiv = $("#current-time-div");
+        let $scale = $(".scale");
+        $scale.html(scale);
+        // 为peakline增加事件
+        $scale.on("click", function (event) {
+            let offset = parseFloat($(".timeBase-change").css("left").slice(0, -2));
+            let newLeft = event.clientX - offset;
+            $drapHand[0].style.left = newLeft + "px";
+            currentTime = newLeft / width * (end - start) * 3600 + parseInt(start) * 3600;
+            $currentTimeDiv.text(sec2Time());
+            $currentTimeDiv.css("display", "block");
+            $currentTimeDiv.fadeOut("slow");
+            updateMap();
+        });
+
+        // 为drapHand增加各类事件
+        let $drapHand = $(".drapHand");
+        let $timeLine = $(".time");
+        let width = $timeLine.outerWidth();
+        let newLeft = 0;
+
+        function updateMap() {
+            ws.send(JSON.stringify({'flag':2, 'query_t':currentTime}));
+        }
+
+        // drag & drop: mouse
+        $drapHand[0].onmousedown = function (event) {
+            event.stopPropagation();
+            let shiftX = event.clientX - $drapHand[0].getBoundingClientRect().left;
+
+            document.addEventListener("mousemove", onMouseMove);
+            document.addEventListener("mouseup", onMouseUp);
+
+            function onMouseMove(event) {
+                newLeft =
+                    event.clientX -
+                    shiftX -
+                    $timeLine[0].getBoundingClientRect().left;
+
+                // the pointer is out of timeLine => lock the drapHand within the bounaries
+                if (newLeft < 0) {
+                    newLeft = 0;
+                }
+                let rightEdge = width - $drapHand.outerWidth();
+                if (newLeft > rightEdge) {
+                    newLeft = rightEdge;
+                }
+                currentTime = newLeft / width * (end - start) * 3600 + parseInt(start) * 3600;
+                $drapHand[0].style.left = newLeft + "px";
+                $currentTimeDiv.text(sec2Time());
+                $currentTimeDiv.css("display", "block");
+            }
+
+            function onMouseUp() {
+                document.removeEventListener("mouseup", onMouseUp);
+                document.removeEventListener("mousemove", onMouseMove);
+                $currentTimeDiv.fadeOut("slow");
+                updateMap();
+            }
+        };
+    }
+    renderTime(4, 24);
+    /*
+     * * 传入小时、分钟，改变时间指针的位置
+     */
+    let $switch = $(".switch");
+    function changeTimehand(time, hourWidth = 5, start = 4, end = 24) {
+        if (time >= 24 * 3600) {
+            $switch.trigger("click");
+        }
+        let handPosition = parseInt((time - 4 * 3600) / (20 * 3600) * 1e6) / 1e4;
+        let delta = handPosition / 100 * 20;
+        $(".drapHand").css("left", "calc(" + handPosition + "% - " + delta + "px)");
+    }
+    let carouselTime = null;
+    $switch.on("click", function () {
+        $(this).toggleClass("active");
+        if ($(this).hasClass("active")) {
+            // "active" 下每隔2s询问一次，flag = 1
+            for (let i = 1; i < option.series.length; i++) {
+                option.series[i].effect.period /= 100000;
+            }
+            let showNext = function () {
+                carouselTime = setTimeout(showNext, carouselTimeInterval);
+                ws.send(JSON.stringify({'flag':1, 'query_t': currentTime}));
+                currentTime += 2;
+                changeTimehand(currentTime);
+             };
+            showNext();
+        } else {
+            for (let i = 1; i < option.series.length; i++) {
+                option.series[i].effect.period *= 100000;
+            }
+            if (carouselTime) {
+                clearTimeout(carouselTime);
+                carouselTime = null;
+            }
+        }
+        myChart.setOption(option);
+    });
+    $('.dropdown-item').click(function() {
+        $('#dropdownMenu').text($(this).text());
+        let speed_string = $(this).text();
+        let former_speed = carouselTimeInterval / 2000;
+        carouselTimeInterval = 2000 / parseInt(speed_string.slice(0, -1));
+        let current_speed = carouselTimeInterval / 2000;
+        for (let i = 1; i < option.series.length; i++) {
+            option.series[i].effect.period *= current_speed / former_speed;
+        }
+        myChart.setOption(option);
+    });
+
+    /**
+     * * 禁止默认的向左拖动会后退
+     */
+    document.addEventListener(
+        "touchmove",
+        function (event) {
+            event.preventDefault();
+        },
+        { passive: false }
+    );
+    let ws = new WebSocket('ws://127.0.0.1:5000/message');
+    let order_series = {};
+    let void_slots = [];
+    ws.onmessage = function(e) {
+        option = myChart.getOption();
+        let data = JSON.parse(e.data);
+        let flag = data['flag'];
+        if (data.hasOwnProperty('demand')) {
+            new AreaRange("peakLine", {"data": {'supply': data['supply'], 'demand': data['demand']}});
+            return;
+        }
+        // console.log(e.data);
+        // console.log(data);
+        order_heatmap = data['order_heat'];   // 二维数组
+        driver_heatmap = data['driver_heat'];  // 二维数组
+        // 暂时默认是订单热力图
+        loadHeatMap();
+
+        let stats = data['stats']; // 字典
+        // 更新sidebar
+        if(JSON.stringify(stats) != '{}') {
+            // console.log(stats);
+            update(getDateObj(),stats);
+            // console.log(stats);
+        }
+
+        if (flag === 2) {
+            for (let i = 1; i < option.series.length; i++) {
+                delete option.series[i];
+            }
+            option.series = [option.series[0]];
+            order_series = {};
+            void_slots = [];
+        }
+        let driver_route = data['track']; // list 每个元素是一个dict dict的key分别是 driver_id order_id route
+        // console.log(driver_route);
+        for(let i = 0; i < driver_route.length; i++) {
+            let order_id = driver_route[i]['order_id'];
+            if(order_series.hasOwnProperty(order_id)) {
+                let series_index = order_series[order_id];
+                delete order_series[order_id];
+                option.series[series_index].data = [];
+                void_slots.push(series_index);
+            }
+            if (driver_route[i]['duration'] !== 0) {
+                // console.log(driver_route[i]);
+                if (void_slots.length > 0) {
+                    order_series[order_id] = void_slots.shift();
+                    let series_index = order_series[order_id];
+                    option.series[series_index].data.push({coords: driver_route[i]['route']});
+                    option.series[series_index].effect.period = driver_route[i]['duration'] * carouselTimeInterval / 2000;
+                } else {
+                    order_series[order_id] = option.series.length;
+                    option.series.push({
+                        type: 'lines',
+                        coordinateSystem: 'bmap',
+                        polyline: true,
+                        data: [{
+                            coords: driver_route[i]['route']
+                        }],
+                        lineStyle: {
+                            width: 0
+                        },
+                        effect: {
+                            period: driver_route[i]['duration'] * carouselTimeInterval / 2000,
+                            show: true,
+                            trailLength: 0.1,
+                            symbolSize: 3.
+                        },
+                        zlevel: 1
+                    });
+                }
+            }
+        }
+        if (flag === 2) {
+            myChart.clear();
+        }
+        myChart.setOption(option);
+     };
+        //分类选择
+    $(".xmgl_heard li").click(function () {
+
+        $(this).attr("class", "");
+        $(this).siblings().attr("class", "hove");
+        $("#xmgl_cen").find(".xmgl_tb").eq($(this).index()).removeClass("none").siblings().addClass("none")
+    });
+</script>
+
+

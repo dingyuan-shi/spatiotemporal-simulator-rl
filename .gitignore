@@ -1,0 +1,8 @@
+**/.vscode/
+**/__pycache__/
+**/*.so
+/envs/resources/**/target/
+.VSCodeCounter
+/envs/engines/*.jar
+**/__MACOSX/
+**/.DS_Store
